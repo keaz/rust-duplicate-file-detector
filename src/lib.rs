@@ -1,11 +1,22 @@
 pub mod searcher {
     extern crate async_std;
     extern crate futures;
-    
-    use std::{fs::{self, Metadata}, path::{PathBuf}, ops::ControlFlow};
+
+    use async_std::fs::File;
+    use async_std::sync::Mutex;
+    use async_std::task;  
+    use async_std::{fs::{self,Metadata},path::{PathBuf}};
+    use async_std::io::{self,BufReader, Read, Write};
+    use data_encoding::HEXUPPER;
+    use futures::{Future, TryStreamExt, StreamExt};
+    use ring::digest::{Digest, Context, SHA256};
+    use std::sync::Arc;
+    use std::{ops::ControlFlow};
     use std::cmp::PartialEq;
     use itertools::Itertools;
-    use sha256::try_digest;
+    use rayon::prelude::*;
+
+    pub type ResultAsync<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
     #[derive(Debug)]
     pub struct FileData {
@@ -34,12 +45,12 @@ pub mod searcher {
     #[derive(Debug)]
     pub struct DuplicateKey{
         pub file_name: String,
-        pub sha: String,
+        pub size: u64,
     }
 
     impl DuplicateKey {
-        pub fn from(file_name: String, sha: String) -> Self{
-            DuplicateKey { file_name, sha }
+        pub fn from(file_name: String, size: u64) -> Self{
+            DuplicateKey { file_name, size }
         }
     }
 
@@ -54,21 +65,24 @@ pub mod searcher {
         }
     }
 
-    pub fn search_duplicates(root_folder: &String, threads: u8)  {
+    pub async fn search_duplicates(root_folder: &String, threads: u8) {
         let path = PathBuf::from(root_folder);
-        let mut file_data: Vec<FileData> = vec![];
-        
-        match fs::read_dir(path) {
-            Err(er) => {
-                eprintln!("Error reading directory {:?}",root_folder);
-            },
-            Ok(entries) => {
-                walk_dir(entries, &mut file_data);
+        let file_data: Vec<FileData> = vec![];
+        let file_data_arch = Arc::new(Mutex::new(file_data));
+
+        let reads = fs::read_dir(path).await;
+        match reads {
+            Err(_) => {
+                return;
+            },Ok(entries) => {
+                task::block_on(walk_dir(entries,Arc::clone(&file_data_arch)));
             }
         }
 
+        let file_data = (*file_data_arch).lock().await;
+
         file_data.iter()
-        .group_by(|file| DuplicateKey::from(file.file_name.clone(), file.sha.clone()))
+        .group_by(|file| DuplicateKey::from(file.file_name.clone(), file.size))
         .into_iter()
         .map(|(key, group)| Duplicate::from(key, group.into_iter().map(|file| file.clone()).collect_vec()))
         .filter(|duplicate| duplicate.duplicates.len() > 1)
@@ -85,28 +99,20 @@ pub mod searcher {
 
     }
 
-    fn walk_dir(entries: fs::ReadDir, file_data: &mut Vec<FileData>) {
+    async fn walk_dir(mut entries: fs::ReadDir, file_data: Arc<Mutex<Vec<FileData>>>) {
+        
+        while let Ok(Some(dir_entry)) = entries.try_next().await {
+            let path = dir_entry.path();
+            let metadata = folder_metadata(&path).await;
 
-        for entry in entries {
-            match entry {
-                Err(err) => {
-                    eprintln!("Error reading entry {:?}",err);
-                },
-                Ok(dir_entry) => {
-                    let path = dir_entry.path();
-                    let metadata = folder_metadata(&path);
-
-                    if let ControlFlow::Break(_) = visit_path(metadata, path, file_data) {
-                        continue;
-                    }
-
-                }
+            if let ControlFlow::Break(_) = visit_path(metadata, path, file_data.clone()).await {
+                continue;
             }
-    
         }
+
     }
 
-    fn visit_path(metadata: Option<Metadata>, path: PathBuf, file_data: &mut Vec<FileData>) -> ControlFlow<()> {
+    async fn visit_path(metadata: Option<Metadata>, path: PathBuf, file_data: Arc<Mutex<Vec<FileData>>>) -> ControlFlow<()> {
         match metadata {
             None => {
                 eprintln!("Failed to read metadata of {:?}",path);
@@ -116,7 +122,7 @@ pub mod searcher {
                     Ok(value) => value,
                     Err(value) => return value,
                 };
-                extract_detail_and_walk(last_modified, metadata, path, file_data );
+                extract_detail_and_walk(last_modified, metadata, path, file_data.clone() ).await;
             }
         }
         ControlFlow::Continue(())
@@ -143,31 +149,34 @@ pub mod searcher {
         Ok(last_modified)
     }
 
-    fn extract_detail_and_walk(last_modified: u64, metadata: Metadata, path: PathBuf, file_data: &mut Vec<FileData>) {
+    async fn extract_detail_and_walk(last_modified: u64, metadata: Metadata, path: PathBuf, file_data: Arc<Mutex<Vec<FileData>>>) {
         if metadata.is_file() {
             let file_name =  path.file_name().ok_or("No filename").unwrap().to_str().unwrap();
             let size = metadata.len();
             let is_readonly = metadata.permissions().readonly();
-            let sha = try_digest(path.as_path()).unwrap();
+            // let x = path.
+            // let sha = try_digest(path).unwrap();
+            let sha = String::from("234");
             let the_file_data = FileData{ file_name: String::from(file_name), path: String::from(path.to_str().unwrap())  ,size ,last_modified,is_readonly, sha };
-            file_data.push(the_file_data);
+            let mut data = (*file_data).lock().await;
+            data.push(the_file_data);
             return;
         }
 
         if metadata.is_dir() {
-            match path.read_dir() {
+            match path.read_dir().await {
                 Err(er) => {
                     eprintln!("Error reading directory {:?} error {:?}",path,er);
                 },
                 Ok(entries) => {
-                    walk_dir(entries, file_data);
+                    task::block_on( walk_dir(entries, file_data.clone()));
                 }
             }
         }
     }
 
-    fn folder_metadata(path: &PathBuf) -> Option<Metadata> {
-        match fs::metadata(path) {
+    async fn folder_metadata(path: &PathBuf) -> Option<Metadata> {
+        match fs::metadata(path).await {
             Err(err) => {
                 Option::None
             },
@@ -176,6 +185,44 @@ pub mod searcher {
             }
         } 
     }
+
+
+    // fn sha256_digest<R: Read>(mut reader: R) -> Option<Digest> {
+    //     let mut context = Context::new(&SHA256);
+    //     let mut buffer = [0; 1024];
+    
+    //     loop {
+    //         let rd = reader.read(&mut buffer);
+    //         let count = reader.read(&mut buffer)?;
+    //         if count == 0 {
+    //             break;
+    //         }
+    //         context.update(&buffer[..count]);
+    //     }
+    
+    //     Some(context.finish())
+    // }
+    
+    // async fn sha() -> Option<String> {
+    //     let path = "file.txt";
+    
+    //     let mut output = File::create(path).await.unwrap();
+    
+    //     let input = File::open(path).await.unwrap();
+    //     let reader = BufReader::new(input);
+    //     let digest = sha256_digest(reader)?;
+        
+    //     Option(HEXUPPER.encode(digest.as_ref()))
+    // }
+    
+// pub fn spawn_and_log_error<F>(fut: F) -> task::JoinHandle<()> where F: Future<Output = Result<()>> + Send + 'static,{
+//     task::spawn(async move {
+//         if let Err(e) = fut.await {
+//             eprintln!("{}", e)
+//         }
+//     })
+// }
+
 
 }
 
