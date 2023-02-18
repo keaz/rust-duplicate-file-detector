@@ -1,8 +1,11 @@
 pub mod searcher {
+    extern crate async_std;
+    extern crate futures;
     
     use std::{fs::{self, Metadata}, path::{PathBuf}, ops::ControlFlow};
     use std::cmp::PartialEq;
     use itertools::Itertools;
+    use sha256::try_digest;
 
     #[derive(Debug)]
     pub struct FileData {
@@ -10,22 +13,20 @@ pub mod searcher {
         pub file_name: String,
         size: u64,
         last_modified: u64,
-        is_readonly: bool
+        is_readonly: bool,
+        sha: String,
     }
 
     impl FileData {
-        pub fn from(path: String, file_name: String,size: u64, last_modified: u64, is_readonly: bool ) -> Self {
-            FileData { path, file_name, size, last_modified, is_readonly }
-        }
-
-        pub fn is_duplicate(&self, another_file: &FileData) -> bool {
-            self.file_name.eq(&another_file.file_name) && self.size == another_file.size
+        pub fn from(path: String, file_name: String,size: u64, last_modified: u64, is_readonly: bool, sha: String ) -> Self {
+            FileData { path, file_name, size, last_modified, is_readonly, sha }
         }
     }
 
     impl Clone for FileData {
         fn clone(&self) -> Self {
-            Self { path: self.path.clone(), file_name: self.file_name.clone(), size: self.size.clone(), last_modified: self.last_modified.clone(), is_readonly: self.is_readonly.clone() }
+            Self { path: self.path.clone(), file_name: self.file_name.clone(), size: self.size.clone(), 
+                last_modified: self.last_modified.clone(), is_readonly: self.is_readonly.clone(), sha: self.sha.clone() }
         }
     }
 
@@ -33,15 +34,13 @@ pub mod searcher {
     #[derive(Debug)]
     pub struct DuplicateKey{
         pub file_name: String,
-        pub size: u64,
+        pub sha: String,
     }
 
     impl DuplicateKey {
-        
-        pub fn from(file_name: String, size: u64) -> Self{
-            DuplicateKey { file_name, size }
+        pub fn from(file_name: String, sha: String) -> Self{
+            DuplicateKey { file_name, sha }
         }
-
     }
 
     struct Duplicate{
@@ -69,17 +68,18 @@ pub mod searcher {
         }
 
         file_data.iter()
-        .group_by(|file| DuplicateKey::from(file.file_name.clone(), file.size))
+        .group_by(|file| DuplicateKey::from(file.file_name.clone(), file.sha.clone()))
         .into_iter()
         .map(|(key, group)| Duplicate::from(key, group.into_iter().map(|file| file.clone()).collect_vec()))
         .filter(|duplicate| duplicate.duplicates.len() > 1)
         .for_each( |duplicate|
             {
-                println!(" Duplicate key {:?}",duplicate.key);
+                println!("Duplicate key {:?}",duplicate.key);
                 duplicate.duplicates.iter().for_each(|file| 
                     {
                         println!("{:?}", file);
-                    })
+                    });
+                println!("************")
             }
         );
 
@@ -148,7 +148,8 @@ pub mod searcher {
             let file_name =  path.file_name().ok_or("No filename").unwrap().to_str().unwrap();
             let size = metadata.len();
             let is_readonly = metadata.permissions().readonly();
-            let the_file_data = FileData{ file_name: String::from(file_name), path: String::from(path.to_str().unwrap())  ,size ,last_modified,is_readonly };
+            let sha = try_digest(path.as_path()).unwrap();
+            let the_file_data = FileData{ file_name: String::from(file_name), path: String::from(path.to_str().unwrap())  ,size ,last_modified,is_readonly, sha };
             file_data.push(the_file_data);
             return;
         }
