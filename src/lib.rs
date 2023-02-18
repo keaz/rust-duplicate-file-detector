@@ -8,7 +8,7 @@ pub mod searcher {
     use async_std::{fs::{self,Metadata},path::{PathBuf}};
     use async_std::io::{self,BufReader, Read, Write};
     use data_encoding::HEXUPPER;
-    use futures::{Future, TryStreamExt, StreamExt};
+    use futures::{Future, TryStreamExt, StreamExt, AsyncReadExt};
     use ring::digest::{Digest, Context, SHA256};
     use std::sync::Arc;
     use std::{ops::ControlFlow};
@@ -45,12 +45,12 @@ pub mod searcher {
     #[derive(Debug)]
     pub struct DuplicateKey{
         pub file_name: String,
-        pub size: u64,
+        pub sha: String,
     }
 
     impl DuplicateKey {
-        pub fn from(file_name: String, size: u64) -> Self{
-            DuplicateKey { file_name, size }
+        pub fn from(file_name: String, sha: String) -> Self{
+            DuplicateKey { file_name, sha }
         }
     }
 
@@ -82,7 +82,7 @@ pub mod searcher {
         let file_data = (*file_data_arch).lock().await;
 
         file_data.iter()
-        .group_by(|file| DuplicateKey::from(file.file_name.clone(), file.size))
+        .group_by(|file| DuplicateKey::from(file.file_name.clone(), file.sha.clone()))
         .into_iter()
         .map(|(key, group)| Duplicate::from(key, group.into_iter().map(|file| file.clone()).collect_vec()))
         .filter(|duplicate| duplicate.duplicates.len() > 1)
@@ -154,13 +154,19 @@ pub mod searcher {
             let file_name =  path.file_name().ok_or("No filename").unwrap().to_str().unwrap();
             let size = metadata.len();
             let is_readonly = metadata.permissions().readonly();
-            // let x = path.
-            // let sha = try_digest(path).unwrap();
-            let sha = String::from("234");
-            let the_file_data = FileData{ file_name: String::from(file_name), path: String::from(path.to_str().unwrap())  ,size ,last_modified,is_readonly, sha };
-            let mut data = (*file_data).lock().await;
-            data.push(the_file_data);
+            let sha = sha(&path).await;
+            match sha {
+                None => {
+                    eprintln!("Failed to create sha for file {:?}",file_name);
+                },
+                Some(sha) => {
+                    let the_file_data = FileData{ file_name: String::from(file_name), path: String::from(path.to_str().unwrap())  ,size ,last_modified,is_readonly, sha };
+                    let mut data = (*file_data).lock().await;
+                    data.push(the_file_data);
+                }
+            }
             return;
+            
         }
 
         if metadata.is_dir() {
@@ -187,42 +193,29 @@ pub mod searcher {
     }
 
 
-    // fn sha256_digest<R: Read>(mut reader: R) -> Option<Digest> {
-    //     let mut context = Context::new(&SHA256);
-    //     let mut buffer = [0; 1024];
+    async fn sha256_digest(mut reader: BufReader<File>) -> Option<Digest> {
+        let mut context = Context::new(&SHA256);
+        let mut buffer = [0; 1024];
     
-    //     loop {
-    //         let rd = reader.read(&mut buffer);
-    //         let count = reader.read(&mut buffer)?;
-    //         if count == 0 {
-    //             break;
-    //         }
-    //         context.update(&buffer[..count]);
-    //     }
+        loop {
+            let count = reader.read(&mut buffer).await.unwrap();
+            if count == 0 {
+                break;
+            }
+            context.update(&buffer[..count]);
+        }
     
-    //     Some(context.finish())
-    // }
+        Some(context.finish())
+    }
     
-    // async fn sha() -> Option<String> {
-    //     let path = "file.txt";
-    
-    //     let mut output = File::create(path).await.unwrap();
-    
-    //     let input = File::open(path).await.unwrap();
-    //     let reader = BufReader::new(input);
-    //     let digest = sha256_digest(reader)?;
+    async fn sha(path: &PathBuf) -> Option<String> {
+        let input = File::open(path).await.unwrap();
+        let reader = BufReader::new(input);
+        let digest = sha256_digest(reader).await?;
         
-    //     Option(HEXUPPER.encode(digest.as_ref()))
-    // }
+        std::option::Option::Some(HEXUPPER.encode(digest.as_ref()))
+    }
     
-// pub fn spawn_and_log_error<F>(fut: F) -> task::JoinHandle<()> where F: Future<Output = Result<()>> + Send + 'static,{
-//     task::spawn(async move {
-//         if let Err(e) = fut.await {
-//             eprintln!("{}", e)
-//         }
-//     })
-// }
-
 
 }
 
