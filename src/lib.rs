@@ -10,11 +10,9 @@ pub mod searcher {
     use data_encoding::HEXUPPER;
     use futures::{TryStreamExt,  AsyncReadExt};
     use ring::digest::{Digest, Context, SHA256};
-    use std::ops::Index;
     use std::sync::Arc;
-    use std::{ops::ControlFlow};
+    use std::ops::ControlFlow;
     use std::cmp::PartialEq;
-    use itertools::Itertools;
     use rayon::prelude::*;
     use fuzzy_matcher::FuzzyMatcher;
     use fuzzy_matcher::skim::{SkimMatcherV2, SkimScoreConfig};
@@ -51,24 +49,12 @@ pub mod searcher {
     #[derive(Debug)]
     pub struct DuplicateKey{
         pub file_name: String,
-        // pub sha: String,
         pub size: u64,
     }
 
     impl DuplicateKey {
         pub fn from(file_name: String, size: u64) -> Self{
             DuplicateKey { file_name, size }
-        }
-    }
-
-    struct Duplicate{
-        key: DuplicateKey,
-        duplicates: Vec<FileData>,
-    }
-
-    impl Duplicate {
-        fn from(key: DuplicateKey, duplicates: Vec<FileData>) -> Self {
-            Duplicate {key,duplicates} 
         }
     }
 
@@ -86,20 +72,15 @@ pub mod searcher {
             }
         }
 
-        let mut file_data = (*file_data_arch).lock().await;
-        let score_config = SkimScoreConfig {
-            gap_extension: -1,
-            ..Default::default()
-        };
         
+        let mut file_data = (*file_data_arch).lock().await;
         println!("Collected {} files",file_data.len());
         println!("Started checking duplicates...");
-        let matcher = SkimMatcherV2::default();
-        let matcher = matcher.score_config(score_config);
+
+        let matcher = configure_matcher();
 
         let mut total_size_of_duplicate = 0;
 
-        let mut duplicate_files: Vec<Duplicate> = vec![];
         let mut count = 0;
         file_data.sort_by(|first,second| first.size.cmp(&second.size));
         loop  {
@@ -109,11 +90,7 @@ pub mod searcher {
             let a_file_date = file_data.get(count).unwrap();
             let duplicates: Vec<_> = file_data[count+1..file_data.len()].par_iter()
             .filter(|file| {
-                let result = matcher.fuzzy_match(file.file_name.as_str(), a_file_date.file_name.as_str());
-                match result {
-                    None => false,
-                    Some(score) => score >= 90 && a_file_date.size == file.size,
-                }
+                is_a_duplicate(&matcher, file, a_file_date)
             }).map(|file| file.clone()).collect();
 
             if !duplicates.is_empty() {
@@ -123,9 +100,9 @@ pub mod searcher {
                 duplicates.iter().for_each(|file|{
                     println!("{} ",file.path.red());
                     total_size_of_duplicate += file.size;
+                
                 });
                 
-                duplicate_files.push(Duplicate{key: DuplicateKey { file_name: a_file_date.file_name.clone(), size: a_file_date.size }, duplicates });
             }
     
             count +=1;
@@ -134,6 +111,25 @@ pub mod searcher {
         let size_ib_mbs = total_size_of_duplicate /(1024*1024);
         println!("{} {} MB","Total Size of duplicate files".bold().green(),size_ib_mbs.to_string().bold().green());
 
+    }
+
+    fn is_a_duplicate(matcher: &SkimMatcherV2, file: &&FileData, a_file_date: &FileData) -> bool {
+        let result = matcher.fuzzy_match(file.file_name.as_str(), a_file_date.file_name.as_str());
+        match result {
+            None => false,
+            Some(score) => score >= 90 && a_file_date.size == file.size,
+        }
+    }
+
+    fn configure_matcher() -> SkimMatcherV2 {
+        let score_config = SkimScoreConfig {
+            gap_extension: -1,
+            ..Default::default()
+        };
+        
+        let matcher = SkimMatcherV2::default();
+        let matcher = matcher.score_config(score_config);
+        matcher
     }
 
     async fn walk_dir(mut entries: fs::ReadDir, file_data: Arc<Mutex<Vec<FileData>>>) {
@@ -195,17 +191,6 @@ pub mod searcher {
             let the_file_data = FileData{ file_name: String::from(file_name), path: String::from(path.to_str().unwrap())  ,size ,last_modified,is_readonly, sha: String::from("") };
             let mut data = (*file_data).lock().await;
             data.push(the_file_data);
-            // let sha = sha(&path).await;
-            // match sha {
-            //     None => {
-            //         eprintln!("Failed to create sha for file {:?}",file_name);
-            //     },
-            //     Some(sha) => {
-            //         let the_file_data = FileData{ file_name: String::from(file_name), path: String::from(path.to_str().unwrap())  ,size ,last_modified,is_readonly, sha };
-            //         let mut data = (*file_data).lock().await;
-            //         data.push(the_file_data);
-            //     }
-            // }
             return;
             
         }
