@@ -10,9 +10,11 @@ pub mod searcher {
     use data_encoding::HEXUPPER;
     use futures::{TryStreamExt,  AsyncReadExt};
     use ring::digest::{Digest, Context, SHA256};
+    use std::slice::SliceIndex;
     use std::sync::Arc;
     use std::ops::ControlFlow;
     use std::cmp::PartialEq;
+    use core::cmp::Ord;
     use rayon::prelude::*;
     use fuzzy_matcher::FuzzyMatcher;
     use fuzzy_matcher::skim::{SkimMatcherV2, SkimScoreConfig};
@@ -23,7 +25,8 @@ pub mod searcher {
 
 
     #[derive(Debug)]
-    pub struct FileData {
+    #[derive(PartialEq,Eq, Ord)]
+pub struct FileData {
         pub path: String,
         pub file_name: String,
         size: u64,
@@ -42,6 +45,16 @@ pub mod searcher {
         fn clone(&self) -> Self {
             Self { path: self.path.clone(), file_name: self.file_name.clone(), size: self.size.clone(), 
                 last_modified: self.last_modified.clone(), is_readonly: self.is_readonly.clone(), sha: self.sha.clone() }
+        }
+    }
+
+    impl PartialOrd for FileData {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            if self.file_name.eq(&other.file_name) {
+                return Some(self.size.cmp(&other.size));
+            }
+
+            Some(self.file_name.cmp(&other.file_name))
         }
     }
 
@@ -73,7 +86,7 @@ pub mod searcher {
         }
 
         
-        let mut file_data = (*file_data_arch).lock().await;
+        let file_data = (*file_data_arch).lock().await;
         println!("Collected {} files",file_data.len());
         println!("Started checking duplicates...");
 
@@ -82,16 +95,16 @@ pub mod searcher {
         let mut total_size_of_duplicate = 0;
 
         let mut count = 0;
-        file_data.sort_by(|first,second| first.size.cmp(&second.size));
+        let mut file_data = file_data.clone();
+        file_data.sort();
+
         loop  {
             if count == file_data.len() {
                 break;
             }
             let a_file_date = file_data.get(count).unwrap();
             let duplicates: Vec<_> = file_data[count+1..file_data.len()].par_iter()
-            .filter(|file| {
-                is_a_duplicate(&matcher, file, a_file_date)
-            }).map(|file| file.clone()).collect();
+            .filter(|file| is_a_duplicate(&matcher, file, a_file_date) ).map(|file| file.clone()).collect();
 
             if !duplicates.is_empty() {
 
@@ -100,9 +113,9 @@ pub mod searcher {
                 duplicates.iter().for_each(|file|{
                     println!("{} ",file.path.red());
                     total_size_of_duplicate += file.size;
-                
                 });
                 
+                file_data = file_data[duplicates.len() - 1..file_data.len()].to_vec();
             }
     
             count +=1;
@@ -128,8 +141,7 @@ pub mod searcher {
         };
         
         let matcher = SkimMatcherV2::default();
-        let matcher = matcher.score_config(score_config);
-        matcher
+        matcher.score_config(score_config)
     }
 
     async fn walk_dir(mut entries: fs::ReadDir, file_data: Arc<Mutex<Vec<FileData>>>) {
