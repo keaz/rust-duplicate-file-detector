@@ -10,6 +10,8 @@ pub mod searcher {
     use data_encoding::HEXUPPER;
     use futures::{TryStreamExt,  AsyncReadExt};
     use ring::digest::{Digest, Context, SHA256};
+    use std::fs::File as STDFile;
+    use std::io::Write;
     use std::slice::SliceIndex;
     use std::sync::Arc;
     use std::ops::ControlFlow;
@@ -98,6 +100,9 @@ pub struct FileData {
         let mut file_data = file_data.clone();
         file_data.sort();
 
+        let mut csv_out = STDFile::options().append(true).create(true).open("out.csv").unwrap();
+        csv_out.write_all(b"File;Path;Size\n");
+
         loop  {
             if count == file_data.len() {
                 break;
@@ -107,19 +112,24 @@ pub struct FileData {
             .filter(|file| is_a_duplicate(&matcher, file, a_file_date) ).map(|file| file.clone()).collect();
 
             if !duplicates.is_empty() {
+                let file_header =  format!("{};{};{}\n",&a_file_date.file_name,"",a_file_date.size);
+                csv_out.write_all(file_header.as_bytes());
 
                 println!("{} {} size {}","File " ,a_file_date.file_name.bold().green(),a_file_date.size.to_string().cyan());
                 println!("{} ",a_file_date.path.red());
                 duplicates.iter().for_each(|file|{
                     println!("{} ",file.path.red());
                     total_size_of_duplicate += file.size;
+                    let file_row =  format!("{};{};{}\n","",file.path,"");
+                    csv_out.write_all(file_row.as_bytes());
                 });
-                
+
                 file_data = file_data[duplicates.len() - 1..file_data.len()].to_vec();
             }
     
             count +=1;
         }
+        csv_out.sync_all();
 
         let size_ib_mbs = total_size_of_duplicate /(1024*1024);
         println!("{} {} MB","Total Size of duplicate files".bold().green(),size_ib_mbs.to_string().bold().green());
