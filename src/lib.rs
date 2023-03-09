@@ -10,6 +10,7 @@ pub mod searcher {
     use data_encoding::HEXUPPER;
     use futures::{TryStreamExt,  AsyncReadExt};
     use ring::digest::{Digest, Context, SHA256};
+    use std::fmt::format;
     use std::slice::SliceIndex;
     use std::sync::Arc;
     use std::ops::ControlFlow;
@@ -19,7 +20,7 @@ pub mod searcher {
     use fuzzy_matcher::FuzzyMatcher;
     use fuzzy_matcher::skim::{SkimMatcherV2, SkimScoreConfig};
     use colored::Colorize;
-
+    use spinners::{Spinner, Spinners};
 
     pub type ResultAsync<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -72,6 +73,9 @@ pub struct FileData {
     }
 
     pub async fn search_duplicates(root_folder: &String) {
+        let msg =  format!("Looking in to path {:?}",root_folder);
+        let mut sp = Spinner::new(Spinners::Aesthetic,msg.into());
+
         let path = PathBuf::from(root_folder);
         let file_data: Vec<FileData> = vec![];
         let file_data_arch = Arc::new(Mutex::new(file_data));
@@ -84,11 +88,13 @@ pub struct FileData {
                 task::block_on(walk_dir(entries,Arc::clone(&file_data_arch)));
             }
         }
-
+        sp.stop();
         
         let file_data = (*file_data_arch).lock().await;
         println!("Collected {} files",file_data.len());
+        
         println!("Started checking duplicates...");
+        
 
         let matcher = configure_matcher();
 
