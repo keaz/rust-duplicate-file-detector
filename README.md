@@ -6,7 +6,7 @@
 [![docs.rs](https://img.shields.io/docsrs/duplicate-checker/1.0.2)](https://crates.io/crates/duplicate-checker)
 
 ## How to
-Install using cargo `cargo install duplicate-checker`
+Install using cargo `cargo install duplicate-checker`  
 Run `duplicate-checker {path-to-check-duplicate}`
 
 ![How to](how-to.png)
