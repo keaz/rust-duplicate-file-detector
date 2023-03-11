@@ -83,6 +83,7 @@ pub struct FileData {
         let reads = fs::read_dir(path).await;
         match reads {
             Err(_) => {
+                sp.stop();
                 return;
             },Ok(entries) => {
                 task::block_on(walk_dir(entries,Arc::clone(&file_data_arch)));
@@ -91,10 +92,9 @@ pub struct FileData {
         sp.stop();
         
         let file_data = (*file_data_arch).lock().await;
+
         println!("Collected {} files",file_data.len());
-        
         println!("Started checking duplicates...");
-        
 
         let matcher = configure_matcher();
 
@@ -108,28 +108,32 @@ pub struct FileData {
             if count == file_data.len() {
                 break;
             }
-            let a_file_date = file_data.get(count).unwrap();
-            let duplicates: Vec<_> = file_data[count+1..file_data.len()].par_iter()
-            .filter(|file| is_a_duplicate(&matcher, file, a_file_date) ).map(|file| file.clone()).collect();
-
-            if !duplicates.is_empty() {
-
-                println!("{} {} size {}","File " ,a_file_date.file_name.bold().green(),a_file_date.size.to_string().cyan());
-                println!("{} ",a_file_date.path.red());
-                duplicates.iter().for_each(|file|{
-                    println!("{} ",file.path.red());
-                    total_size_of_duplicate += file.size;
-                });
-                
-                file_data = file_data[duplicates.len() - 1..file_data.len()].to_vec();
-            }
-    
+            find_duplicate(&mut file_data, count, &matcher, &mut total_size_of_duplicate);
             count +=1;
         }
 
         let size_ib_mbs = total_size_of_duplicate /(1024*1024);
         println!("{} {} MB","Total Size of duplicate files".bold().green(),size_ib_mbs.to_string().bold().green());
 
+    }
+
+    fn find_duplicate(file_data: &mut Vec<FileData>, count: usize, matcher: &SkimMatcherV2, total_size_of_duplicate: &mut u64) {
+        let a_file_date = file_data.get(count).unwrap();
+        let sliced : Vec<FileData> =  file_data[count+1..file_data.len()].to_vec();
+        let duplicates: Vec<_> = sliced.par_iter()
+        .filter(|file| is_a_duplicate(matcher, file, a_file_date) ).map(|file| file.clone()).collect();
+
+        if !duplicates.is_empty() {
+
+            println!("{} {} size {}","File " ,a_file_date.file_name.bold().green(),a_file_date.size.to_string().cyan());
+            println!("{} ",a_file_date.path.red());
+            duplicates.iter().for_each(|file|{
+                println!("{} ",file.path.red());
+                *total_size_of_duplicate += file.size;
+            });
+    
+            *file_data = file_data[duplicates.len() - 1..file_data.len()].to_vec();
+        }
     }
 
     fn is_a_duplicate(matcher: &SkimMatcherV2, file: &&FileData, a_file_date: &FileData) -> bool {
@@ -202,11 +206,7 @@ pub struct FileData {
 
     async fn extract_detail_and_walk(last_modified: u64, metadata: Metadata, path: PathBuf, file_data: Arc<Mutex<Vec<FileData>>>) {
         if metadata.is_file() {
-            let file_name =  path.file_name().ok_or("No filename").unwrap().to_str().unwrap();
-            let size = metadata.len();
-            let is_readonly = metadata.permissions().readonly();
-
-            let the_file_data = FileData{ file_name: String::from(file_name), path: String::from(path.to_str().unwrap())  ,size ,last_modified,is_readonly, sha: String::from("") };
+            let the_file_data = extract_file_data(&path, &metadata, last_modified);
             let mut data = (*file_data).lock().await;
             data.push(the_file_data);
             return;
@@ -223,6 +223,15 @@ pub struct FileData {
                 }
             }
         }
+    }
+
+    fn extract_file_data(path: &PathBuf, metadata: &Metadata, last_modified: u64) -> FileData {
+        let file_name =  path.file_name().ok_or("No filename").unwrap().to_str().unwrap();
+        let size = metadata.len();
+        let is_readonly = metadata.permissions().readonly();
+
+        let the_file_data = FileData{ file_name: String::from(file_name), path: String::from(path.to_str().unwrap())  ,size ,last_modified,is_readonly, sha: String::from("") };
+        the_file_data
     }
 
     async fn folder_metadata(path: &PathBuf) -> Option<Metadata> {
@@ -261,5 +270,10 @@ pub struct FileData {
     }
     
 
+}
+
+#[cfg(test)]
+mod tests {
+    
 }
 
