@@ -272,8 +272,3 @@ pub struct FileData {
 
 }
 
-#[cfg(test)]
-mod tests {
-    
-}
-
