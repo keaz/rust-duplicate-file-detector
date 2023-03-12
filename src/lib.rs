@@ -1,3 +1,4 @@
+pub mod cmd_handler;
 pub mod searcher {
     extern crate async_std;
     extern crate futures;
@@ -21,6 +22,8 @@ pub mod searcher {
     use fuzzy_matcher::skim::{SkimMatcherV2, SkimScoreConfig};
     use colored::Colorize;
     use spinners::{Spinner, Spinners};
+
+    use crate::cmd_handler::CmdArgs;
 
     pub type ResultAsync<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -72,11 +75,11 @@ pub struct FileData {
         }
     }
 
-    pub async fn search_duplicates(root_folder: &String) {
-        let msg =  format!("Looking in to path {:?}",root_folder);
+    pub async fn search_duplicates(cmds: &CmdArgs) {
+        let msg =  format!("Looking in to path {:?}",cmds.root_folder);
         let mut sp = Spinner::new(Spinners::Aesthetic,msg.into());
 
-        let path = PathBuf::from(root_folder);
+        let path = PathBuf::from(cmds.root_folder.clone());
         let file_data: Vec<FileData> = vec![];
         let file_data_arch = Arc::new(Mutex::new(file_data));
 
@@ -94,7 +97,7 @@ pub struct FileData {
         let file_data = (*file_data_arch).lock().await;
 
         println!("Collected {} files",file_data.len());
-        println!("Started checking duplicates...");
+        println!("Started checking duplicates using score {}...",cmds.search_score);
 
         let matcher = configure_matcher();
 
@@ -108,7 +111,7 @@ pub struct FileData {
             if count == file_data.len() {
                 break;
             }
-            find_duplicate(&mut file_data, count, &matcher, &mut total_size_of_duplicate);
+            find_duplicate(&mut file_data, count, &matcher, &mut total_size_of_duplicate,cmds.search_score);
             count +=1;
         }
 
@@ -117,11 +120,11 @@ pub struct FileData {
 
     }
 
-    fn find_duplicate(file_data: &mut Vec<FileData>, count: usize, matcher: &SkimMatcherV2, total_size_of_duplicate: &mut u64) {
+    fn find_duplicate(file_data: &mut Vec<FileData>, count: usize, matcher: &SkimMatcherV2, total_size_of_duplicate: &mut u64, score_value: i64) {
         let a_file_date = file_data.get(count).unwrap();
         let sliced : Vec<FileData> =  file_data[count+1..file_data.len()].to_vec();
         let duplicates: Vec<_> = sliced.par_iter()
-        .filter(|file| is_a_duplicate(matcher, file, a_file_date) ).map(|file| file.clone()).collect();
+        .filter(|file| is_a_duplicate(matcher, file, a_file_date,score_value) ).map(|file| file.clone()).collect();
 
         if !duplicates.is_empty() {
 
@@ -136,17 +139,16 @@ pub struct FileData {
         }
     }
 
-    fn is_a_duplicate(matcher: &SkimMatcherV2, file: &&FileData, a_file_date: &FileData) -> bool {
+    fn is_a_duplicate(matcher: &SkimMatcherV2, file: &&FileData, a_file_date: &FileData, score_value: i64) -> bool {
         let result = matcher.fuzzy_match(file.file_name.as_str(), a_file_date.file_name.as_str());
         match result {
             None => false,
-            Some(score) => score >= 90 && a_file_date.size == file.size,
+            Some(score) => score >= score_value && a_file_date.size == file.size,
         }
     }
 
     fn configure_matcher() -> SkimMatcherV2 {
         let score_config = SkimScoreConfig {
-            gap_extension: -1,
             ..Default::default()
         };
         

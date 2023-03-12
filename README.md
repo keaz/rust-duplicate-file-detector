@@ -7,6 +7,9 @@
 
 ## How to
 Install using cargo `cargo install duplicate-checker`  
-Run `duplicate-checker {path-to-check-duplicate}`
+Run `duplicate-checker -f={path-to-check-duplicate} -s=90`  
+CMD arguments  
+`-f` Path to check duplicate  
+`-s` Search score
 
 ![How to](how-to.png)
