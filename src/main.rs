@@ -1,21 +1,11 @@
 use std::{env, process};
 use async_std::task;
-use duplicate_checker::searcher::search_duplicates;
-use duplicate_checker::cmd_handler::extract_cmd;
+use clap::Parser;
+use duplicate_checker::{searcher::search_duplicates, cmd_handler::CmdArgs};
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    let cmds = extract_cmd(args);
-    match cmds {
-        Err(msg) => {
-            eprintln!("{}", &msg);
-            process::exit(0);
-        },
-        Ok(value) => {
-            
-            let search_future = search_duplicates(&value);
-            task::block_on(search_future);
-        }
-    }
+    let cmds = CmdArgs::parse_from(env::args_os());
+    let search_future = search_duplicates(&cmds);
+    task::block_on(search_future);
     
 }

@@ -11,8 +11,6 @@ pub mod searcher {
     use data_encoding::HEXUPPER;
     use futures::{TryStreamExt,  AsyncReadExt};
     use ring::digest::{Digest, Context, SHA256};
-    use std::fmt::format;
-    use std::slice::SliceIndex;
     use std::sync::Arc;
     use std::ops::ControlFlow;
     use std::cmp::PartialEq;

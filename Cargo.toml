@@ -1,6 +1,6 @@
 [package]
 name = "duplicate-checker"
-version = "1.2.0"
+version = "1.4.0"
 edition = "2021"
 description = "A duplicate file checker"
 license = "MIT OR Apache-2.0"
@@ -16,3 +16,4 @@ data-encoding = "2.3.3"
 fuzzy-matcher = "0.3.7"
 colored = "2.0.0"
 spinners = "4.1.0"
+clap = { version = "4.3.10", features = ["derive"] }
