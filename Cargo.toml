@@ -10,10 +10,10 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 rayon = "1.6"
 futures = "0.3.0"
-async-std = "1"
 ring = "0.16.20"
 data-encoding = "2.3.3"
 fuzzy-matcher = "0.3.7"
 colored = "2.0.0"
 spinners = "4.1.0"
 clap = { version = "4.3.10", features = ["derive"] }
+tokio = { version = "1.32.0", features = ["macros","rt","rt-multi-thread","sync","io-std","io-util","fs"]}

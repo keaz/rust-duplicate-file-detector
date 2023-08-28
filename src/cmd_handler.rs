@@ -1,6 +1,5 @@
 use clap::Parser;
 
-
 /// CLI application that search duplicate files in a folder
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -18,10 +17,5 @@ pub struct CmdArgs {
     pub use_sha: bool,
 }
 
-
 #[cfg(test)]
-mod tests {
-
-    use super::*;
-
-}
+mod tests {}

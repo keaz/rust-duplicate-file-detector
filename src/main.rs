@@ -1,11 +1,9 @@
-use std::{env, process};
-use async_std::task;
 use clap::Parser;
-use duplicate_checker::{searcher::search_duplicates, cmd_handler::CmdArgs};
+use duplicate_checker::{cmd_handler::CmdArgs, searcher::search_duplicates};
+use std::env;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cmds = CmdArgs::parse_from(env::args_os());
-    let search_future = search_duplicates(&cmds);
-    task::block_on(search_future);
-    
+    search_duplicates(&cmds).await;
 }
