@@ -12,9 +12,6 @@ pub struct CmdArgs {
     #[arg(short, long, default_value_t = 90)]
     pub search_score: i64,
 
-    /// Use sha256 to compare files, default is false
-    #[arg(short, long, default_value_t = false)]
-    pub use_sha: bool,
 }
 
 #[cfg(test)]
