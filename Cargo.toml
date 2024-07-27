@@ -1,6 +1,6 @@
 [package]
 name = "duplicate-checker"
-version = "2.0.0"
+version = "2.0.1"
 edition = "2021"
 description = "A duplicate file checker"
 license = "MIT OR Apache-2.0"
@@ -8,12 +8,20 @@ license = "MIT OR Apache-2.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rayon = "1.6"
-futures = "0.3.0"
-ring = "0.16.20"
-data-encoding = "2.3.3"
+rayon = "1.10.0"
+futures = "0.3.30"
+ring = "0.17.8"
+data-encoding = "2.6.0"
 fuzzy-matcher = "0.3.7"
-colored = "2.0.0"
-spinners = "4.1.0"
-clap = { version = "4.3.10", features = ["derive"] }
-tokio = { version = "1.32.0", features = ["macros","rt","rt-multi-thread","sync","io-std","io-util","fs"]}
+colored = "2.1.0"
+spinners = "4.1.1"
+clap = { version = "4.5.11", features = ["derive"] }
+tokio = { version = "1.39.2", features = [
+    "macros",
+    "rt",
+    "rt-multi-thread",
+    "sync",
+    "io-std",
+    "io-util",
+    "fs",
+] }

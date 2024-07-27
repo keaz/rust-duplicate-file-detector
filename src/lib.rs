@@ -24,7 +24,7 @@ pub mod searcher {
 
     pub type ResultAsync<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-    #[derive(Debug, PartialEq, Eq, Ord)]
+    #[derive(Debug, PartialEq, Eq)]
     pub struct FileData {
         pub path: String,
         pub file_name: String,
@@ -59,9 +59,9 @@ pub mod searcher {
             Self {
                 path: self.path.clone(),
                 file_name: self.file_name.clone(),
-                size: self.size.clone(),
-                last_modified: self.last_modified.clone(),
-                is_readonly: self.is_readonly.clone(),
+                size: self.size,
+                last_modified: self.last_modified,
+                is_readonly: self.is_readonly,
                 sha: self.sha.clone(),
             }
         }
@@ -69,11 +69,17 @@ pub mod searcher {
 
     impl PartialOrd for FileData {
         fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    impl Ord for FileData {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
             if self.file_name.eq(&other.file_name) {
-                return Some(self.size.cmp(&other.size));
+                return self.size.cmp(&other.size);
             }
 
-            Some(self.file_name.cmp(&other.file_name))
+            self.file_name.cmp(&other.file_name)
         }
     }
 
@@ -91,7 +97,7 @@ pub mod searcher {
 
     pub async fn search_duplicates(cmds: &CmdArgs) {
         let msg = format!("Looking in to path {:?}", cmds.root_folder);
-        let mut sp = Spinner::new(Spinners::Aesthetic, msg.into());
+        let mut sp = Spinner::new(Spinners::Aesthetic, msg);
 
         let path = PathBuf::from(cmds.root_folder.clone());
         let file_data: Vec<FileData> = vec![];
@@ -165,8 +171,7 @@ pub mod searcher {
 
         if !duplicates.is_empty() {
             println!(
-                "{} {} size {}",
-                "File ",
+                "File {} size {}",
                 a_file_date.file_name.bold().green(),
                 a_file_date.size.to_string().cyan()
             );
@@ -194,7 +199,7 @@ pub mod searcher {
                 if is_score_ok {
                     return a_file_date.sha.eq_ignore_ascii_case(&file.sha);
                 }
-                return false;
+                false
             }
         }
     }
@@ -310,7 +315,7 @@ pub mod searcher {
             size,
             last_modified,
             is_readonly,
-            sha: sha,
+            sha,
         };
         the_file_data
     }
@@ -319,7 +324,7 @@ pub mod searcher {
         match fs::metadata(path).await {
             Err(err) => {
                 eprintln!("Error reading metadata {:?} error {:?}", path, err);
-                return Option::None;
+                Option::None
             }
             Ok(metadata) => Option::Some(metadata),
         }
