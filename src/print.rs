@@ -1,4 +1,4 @@
-use tabled::{Table, Tabled};
+use tabled::Tabled;
 
 #[derive(Tabled)]
 pub struct Duplicate {

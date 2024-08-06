@@ -1,6 +1,5 @@
 extern crate futures;
 
-use colored::Colorize;
 use core::cmp::Ord;
 use data_encoding::HEXUPPER;
 use futures::future::BoxFuture;
