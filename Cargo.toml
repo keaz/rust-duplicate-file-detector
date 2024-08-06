@@ -25,3 +25,4 @@ tokio = { version = "1.39.2", features = [
     "io-util",
     "fs",
 ] }
+tabled = "0.16.0"

@@ -1,6 +1,12 @@
 use clap::Parser;
-use duplicate_checker::{cmd_handler::CmdArgs, searcher::search_duplicates};
 use std::env;
+
+use self::cmd_handler::CmdArgs;
+use duplicate_check::search_duplicates;
+
+mod cmd_handler;
+mod duplicate_check;
+mod print;
 
 #[tokio::main]
 async fn main() {
