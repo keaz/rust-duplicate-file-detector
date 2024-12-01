@@ -4,12 +4,9 @@ use core::cmp::Ord;
 use data_encoding::HEXUPPER;
 use futures::future::BoxFuture;
 use futures::{AsyncReadExt, FutureExt};
-use fuzzy_matcher::skim::{SkimMatcherV2, SkimScoreConfig};
-use fuzzy_matcher::FuzzyMatcher;
 use rayon::prelude::*;
 use ring::digest::{Context, Digest, SHA256};
 use spinners::{Spinner, Spinners};
-use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::{cmp::PartialEq, fs::Metadata, path::PathBuf};
 use tabled::Table;
@@ -17,9 +14,10 @@ use tokio::fs::{self};
 use tokio::fs::{File, ReadDir};
 use tokio::io::BufReader;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 use crate::cmd_handler::CmdArgs;
-use crate::print::Duplicate;
+use crate::print::{DisplayVec, Duplicate};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct FileData {
@@ -28,27 +26,6 @@ pub struct FileData {
     size: u64,
     last_modified: u64,
     is_readonly: bool,
-    sha: String,
-}
-
-impl FileData {
-    pub fn from(
-        path: String,
-        file_name: String,
-        size: u64,
-        last_modified: u64,
-        is_readonly: bool,
-        sha: String,
-    ) -> Self {
-        FileData {
-            path,
-            file_name,
-            size,
-            last_modified,
-            is_readonly,
-            sha,
-        }
-    }
 }
 
 impl Clone for FileData {
@@ -59,7 +36,6 @@ impl Clone for FileData {
             size: self.size,
             last_modified: self.last_modified,
             is_readonly: self.is_readonly,
-            sha: self.sha.clone(),
         }
     }
 }
@@ -86,12 +62,6 @@ pub struct DuplicateKey {
     pub size: u64,
 }
 
-impl DuplicateKey {
-    pub fn from(file_name: String, size: u64) -> Self {
-        DuplicateKey { file_name, size }
-    }
-}
-
 pub async fn search_duplicates(cmds: &CmdArgs) {
     let msg = format!("Looking in to path {:?}", cmds.root_folder);
     let mut sp = Spinner::new(Spinners::Aesthetic, msg);
@@ -115,13 +85,7 @@ pub async fn search_duplicates(cmds: &CmdArgs) {
 
     let file_data = (*file_data_arch).lock().await;
 
-    println!("Collected {} files", file_data.len());
-    println!(
-        "Started checking duplicates using score {}...",
-        cmds.search_score
-    );
-
-    let matcher = configure_matcher();
+    println!("\nCollected {} files", file_data.len());
 
     let mut total_size_of_duplicate = 0;
 
@@ -135,16 +99,15 @@ pub async fn search_duplicates(cmds: &CmdArgs) {
             break;
         }
 
-        let duplicate = find_duplicate(
-            &mut file_data,
-            count,
-            &matcher,
-            &mut total_size_of_duplicate,
-            cmds.search_score,
-        );
+        let duplicate = find_duplicate(&mut file_data, count, &mut total_size_of_duplicate).await;
         duplicate_map.push(duplicate);
         count += 1;
     }
+
+    let mut duplicate_map: Vec<&(FileData, Vec<FileData>)> =
+        duplicate_map.iter().filter(|f| f.1.len() > 0).collect();
+
+    duplicate_map.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
 
     let mut duplicate = vec![];
     for (file, duplicates) in duplicate_map {
@@ -157,9 +120,14 @@ pub async fn search_duplicates(cmds: &CmdArgs) {
         } else {
             format!("{} Byte", file.size)
         };
+        let duplicate_vec = duplicates
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<Vec<String>>();
+
         duplicate.push(Duplicate::from(
-            file.file_name,
-            file.sha,
+            file.path.clone(),
+            DisplayVec::new(duplicate_vec),
             size,
             duplicates.len(),
         ));
@@ -169,22 +137,33 @@ pub async fn search_duplicates(cmds: &CmdArgs) {
     tokio::fs::write("duplicate.txt", table.as_bytes())
         .await
         .unwrap();
-    println!("{}", table);
 }
 
-fn find_duplicate(
+async fn find_duplicate(
     file_data: &mut Vec<FileData>,
     count: usize,
-    matcher: &SkimMatcherV2,
     total_size_of_duplicate: &mut u64,
-    score_value: i64,
 ) -> (FileData, Vec<FileData>) {
     let a_file_date = file_data.get(count).unwrap();
     let sliced: Vec<FileData> = file_data[count + 1..file_data.len()].to_vec();
+
+    // Collect the results of is_a_duplicate asynchronously
+    let duplicate_checks: Vec<_> =
+        futures::future::join_all(sliced.iter().map(|file| is_a_duplicate(file, a_file_date)))
+            .await;
+
     let duplicates: Vec<_> = sliced
-        .par_iter()
-        .filter(|file| is_a_duplicate(matcher, file, a_file_date, score_value))
-        .map(|file| file.clone())
+        .into_par_iter()
+        .zip(duplicate_checks.into_par_iter())
+        .filter_map(
+            |(file, is_duplicate)| {
+                if is_duplicate {
+                    Some(file)
+                } else {
+                    None
+                }
+            },
+        )
         .collect();
 
     let file = a_file_date.clone();
@@ -199,36 +178,33 @@ fn find_duplicate(
     (file, duplicates)
 }
 
-fn is_a_duplicate(
-    matcher: &SkimMatcherV2,
-    file: &&FileData,
-    a_file_date: &FileData,
-    score_value: i64,
-) -> bool {
-    let result = matcher.fuzzy_match(file.file_name.as_str(), a_file_date.file_name.as_str());
-    match result {
-        None => false,
-        Some(score) => score >= score_value && a_file_date.sha.eq_ignore_ascii_case(&file.sha),
+async fn is_a_duplicate(file: &FileData, a_file_date: &FileData) -> bool {
+    if file.size != a_file_date.size {
+        return false;
     }
-}
 
-fn configure_matcher() -> SkimMatcherV2 {
-    let score_config = SkimScoreConfig {
-        ..Default::default()
-    };
+    let file = PathBuf::from(&file.path);
+    let a_file_date = PathBuf::from(&a_file_date.path);
 
-    let matcher = SkimMatcherV2::default();
-    matcher.score_config(score_config)
+    let file_sha = sha(&file).await.unwrap();
+    let a_file_date_sha = sha(&a_file_date).await.unwrap();
+
+    file_sha.eq(&a_file_date_sha)
 }
 
 async fn walk_dir(mut entries: fs::ReadDir, file_data: Arc<Mutex<Vec<FileData>>>) {
+    let mut tasks = vec![];
     while let Ok(Some(dir_entry)) = entries.next_entry().await {
         let path = dir_entry.path();
         let metadata = folder_metadata(&path).await;
 
-        if let ControlFlow::Break(_) = visit_path(metadata, path, file_data.clone()).await {
-            continue;
+        if let Some(handler) = visit_path(metadata, path, file_data.clone()).await {
+            tasks.push(handler);
         }
+    }
+
+    for task in tasks {
+        task.await.unwrap();
     }
 }
 
@@ -236,7 +212,7 @@ async fn visit_path(
     metadata: Option<Metadata>,
     path: PathBuf,
     file_data: Arc<Mutex<Vec<FileData>>>,
-) -> ControlFlow<()> {
+) -> Option<JoinHandle<()>> {
     match metadata {
         None => {
             eprintln!("Failed to read metadata of {:?}", path);
@@ -244,24 +220,26 @@ async fn visit_path(
         Some(metadata) => {
             let last_modified = match get_modified_date(&metadata) {
                 Ok(value) => value,
-                Err(value) => return value,
+                Err(_) => return None,
             };
-            extract_detail_and_walk(last_modified, metadata, path, file_data.clone()).await;
+            let task =
+                extract_detail_and_walk(last_modified, metadata, path, file_data.clone()).await;
+            return task;
         }
     }
-    ControlFlow::Continue(())
+    None
 }
 
-fn get_modified_date(metadata: &Metadata) -> Result<u64, ControlFlow<()>> {
+fn get_modified_date(metadata: &Metadata) -> Result<u64, String> {
     let last_modified = match metadata.modified() {
         Err(err) => {
             eprintln!("Error reading modified value from {:?}", err);
-            return Err(ControlFlow::Break(()));
+            return Err(format!("Error reading modified value from {:?}", err));
         }
         Ok(sys_time) => match sys_time.elapsed() {
             Err(err) => {
                 eprintln!("Error reading elapsed value from {:?}", err);
-                return Err(ControlFlow::Break(()));
+                return Err(format!("Error reading elapsed value from {:?}", err));
             }
             Ok(time) => time.as_secs(),
         },
@@ -274,25 +252,29 @@ fn extract_detail_and_walk(
     metadata: Metadata,
     path: PathBuf,
     file_data: Arc<Mutex<Vec<FileData>>>,
-) -> BoxFuture<'static, ()> {
+) -> BoxFuture<'static, Option<JoinHandle<()>>> {
     async move {
         if metadata.is_file() {
             let the_file_data = extract_file_data(&path, &metadata, last_modified).await;
             let mut data = (*file_data).lock().await;
             data.push(the_file_data);
-            return;
+            return None;
         }
 
         if metadata.is_dir() {
-            match fs::read_dir(&path).await {
-                Err(er) => {
-                    eprintln!("Error reading directory {:?} error {:?}", path, er);
+            let handler = tokio::spawn(async move {
+                match fs::read_dir(&path).await {
+                    Err(er) => {
+                        eprintln!("Error reading directory {:?} error {:?}", path, er);
+                    }
+                    Ok(entries) => {
+                        walk(entries, file_data).await;
+                    }
                 }
-                Ok(entries) => {
-                    walk(entries, file_data).await;
-                }
-            }
+            });
+            return Some(handler);
         }
+        None
     }
     .boxed()
 }
@@ -311,7 +293,6 @@ async fn extract_file_data(path: &PathBuf, metadata: &Metadata, last_modified: u
         .unwrap();
     let size = metadata.len();
     let is_readonly = metadata.permissions().readonly();
-    let sha = sha(path).await.unwrap();
 
     let the_file_data = FileData {
         file_name: String::from(file_name),
@@ -319,7 +300,6 @@ async fn extract_file_data(path: &PathBuf, metadata: &Metadata, last_modified: u
         size,
         last_modified,
         is_readonly,
-        sha,
     };
     the_file_data
 }
